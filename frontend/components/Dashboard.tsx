@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart,
@@ -99,36 +99,83 @@ function EventBadge({ type }: { type: string }) {
 }
 
 export default function Dashboard() {
-  const [users,      setUsers]      = useState<User[]>([]);
-  const [roles,      setRoles]      = useState<Role[]>([]);
-  const [uroles,     setUroles]     = useState<UR[]>([]);
-  const [sod,        setSod]        = useState<{ sod_violations: SODViolation[]; total: number }>({ sod_violations: [], total: 0 });
-  const [threats,    setThreats]    = useState<Threat[]>([]);
-  const [audit,      setAudit]      = useState<AuditEntry[]>([]);
-  const [risk,       setRisk]       = useState<RiskScore[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState('');
-  const [tab,        setTab]        = useState<'overview'|'threats'|'sod'|'users'|'roles'|'audit'>('overview');
+  const [users,       setUsers]       = useState<User[]>([]);
+  const [userTotal,   setUserTotal]   = useState(0);
+  const [userPage,    setUserPage]    = useState(0);
+  const [userSearch,  setUserSearch]  = useState('');
+  const PAGE_SIZE = 50;
 
-  useEffect(() => {
-    Promise.all([
-      apiFetch('/users'),
-      apiFetch('/roles'),
-      apiFetch('/reports/access'),
-      apiFetch('/reports/sod'),
-      apiFetch('/reports/threats'),
-      apiFetch('/reports/audit?limit=50'),
-      apiFetch('/reports/risk'),
-    ]).then(([u, r, ur, s, th, au, ri]) => {
-      setUsers(u);
+  const [roles,       setRoles]       = useState<Role[]>([]);
+  const [uroles,      setUroles]      = useState<UR[]>([]);
+  const [sod,         setSod]         = useState<{ sod_violations: SODViolation[]; total: number }>({ sod_violations: [], total: 0 });
+  const [threats,     setThreats]     = useState<Threat[]>([]);
+  const [audit,       setAudit]       = useState<AuditEntry[]>([]);
+  const [risk,        setRisk]        = useState<RiskScore[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [error,       setError]       = useState('');
+  const [tab,         setTab]         = useState<'overview'|'threats'|'sod'|'users'|'roles'|'audit'|'tasks'>('overview');
+
+  // Fetch paginated users separately so pagination doesn't reload everything
+  const fetchUsers = async (page: number, search: string) => {
+    const skip = page * PAGE_SIZE;
+    const q = search ? `&search=${encodeURIComponent(search)}` : '';
+    const data = await apiFetch(`/users?skip=${skip}&limit=${PAGE_SIZE}${q}`);
+    // Handle BOTH response shapes:
+    // Old backend: plain array  [ {id, username, ...}, ... ]
+    // New backend: { total: N, users: [...] }
+    if (Array.isArray(data)) {
+      setUsers(data);
+      setUserTotal(data.length);
+    } else if (data && Array.isArray(data.users)) {
+      setUsers(data.users);
+      setUserTotal(data.total ?? data.users.length);
+    } else {
+      setUsers([]);
+      setUserTotal(0);
+    }
+  };
+
+  const fetchAll = async (isInitial = false) => {
+    if (!isInitial) setRefreshing(true);
+    try {
+      const [r, ur, s, th, au, ri] = await Promise.all([
+        apiFetch('/roles'),
+        apiFetch('/reports/access'),
+        apiFetch('/reports/sod'),
+        apiFetch('/reports/threats'),
+        apiFetch('/reports/audit?limit=100'),
+        apiFetch('/reports/risk'),
+      ]);
+      await fetchUsers(userPage, userSearch);
       setRoles(r);
       setUroles(Array.isArray(ur) ? ur : []);
       setSod(s);
       setThreats(th);
       setAudit(Array.isArray(au) ? au : []);
       setRisk(ri.risk_scores ?? []);
+      setLastUpdated(new Date());
+      setError('');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
       setLoading(false);
-    }).catch(e => { setError(e.message); setLoading(false); });
+      setRefreshing(false);
+    }
+  };
+
+  // Re-fetch users when page or search changes (skip on first mount — fetchAll handles that)
+  const isFirstMount = useRef(true);
+  useEffect(() => {
+    if (isFirstMount.current) { isFirstMount.current = false; return; }
+    fetchUsers(userPage, userSearch);
+  }, [userPage, userSearch]);
+
+  useEffect(() => {
+    fetchAll(true);
+    const interval = setInterval(() => fetchAll(false), 30000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) return (
@@ -151,17 +198,14 @@ export default function Dashboard() {
   );
 
   // ── derived data ──────────────────────────────────────────────────────────
-  const activeUsers   = users.filter(u => u.is_active).length;
-  const inactiveUsers = users.length - activeUsers;
+  const safeUsers     = Array.isArray(users) ? users : [];
+  const activeUsers   = safeUsers.filter(u => u.is_active).length;
+  const inactiveUsers = safeUsers.length - activeUsers;
   const activeAssigns = uroles.filter(u => u.is_active).length;
   const highThreats   = threats.filter(t => t.severity === 'HIGH').length;
 
-  // dept map: id → name
-  const deptNameMap: Record<number, string> = {};
-  // We don't have dept API but users have department_id, count them
   const deptCount: Record<number, number> = {};
-  users.forEach(u => { deptCount[u.department_id] = (deptCount[u.department_id] ?? 0) + 1; });
-  // dept IDs 1-5 map to the seeded names
+  safeUsers.forEach(u => { deptCount[u.department_id] = (deptCount[u.department_id] ?? 0) + 1; });
   const DEPT_NAMES: Record<number, string> = { 1: 'Engineering', 2: 'Finance', 3: 'HR', 4: 'Security', 5: 'Operations' };
   const deptData = Object.entries(deptCount).map(([id, count]) => ({
     name: DEPT_NAMES[Number(id)] ?? `Dept ${id}`, value: count,
@@ -183,9 +227,10 @@ export default function Dashboard() {
     { id: 'overview' as const, label: 'Overview',    icon: '◈' },
     { id: 'threats'  as const, label: `Threats${highThreats ? ` (${highThreats})` : ''}`, icon: '⚠' },
     { id: 'sod'      as const, label: `SOD Violations${sod.total ? ` (${sod.total})` : ''}`, icon: '◉' },
-    { id: 'users'    as const, label: 'Users',       icon: '⬡' },
+    { id: 'users'    as const, label: `Users (${userTotal})`, icon: '⬡' },
     { id: 'roles'    as const, label: 'Roles',       icon: '◇' },
     { id: 'audit'    as const, label: 'Audit Log',   icon: '≡' },
+    { id: 'tasks'    as const, label: 'Celery Tasks', icon: '⚙' },
   ];
 
   return (
@@ -228,7 +273,19 @@ export default function Dashboard() {
             <span className="pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: '#3fb950', display: 'inline-block' }} />
             ONLINE
           </div>
-          <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#8b949e' }}>{new Date().toLocaleTimeString()}</span>
+          {lastUpdated && (
+            <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#484f58' }}>
+              updated {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <button
+            onClick={() => fetchAll(false)}
+            disabled={refreshing}
+            style={{ background: refreshing ? '#21262d' : '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: '6px 14px', color: refreshing ? '#484f58' : '#8b949e', fontSize: 12, cursor: refreshing ? 'default' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.15s' }}
+          >
+            <span style={{ display: 'inline-block', animation: refreshing ? 'spin 0.8s linear infinite' : 'none' }}>↻</span>
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
       </header>
 
@@ -254,7 +311,7 @@ export default function Dashboard() {
 
             {/* stat row */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }}>
-              <StatCard label="Total Users"        value={users.length}    sub={`${activeUsers} active`}      accent="#58a6ff" />
+              <StatCard label="Total Users"        value={userTotal || safeUsers.length}  sub={`${activeUsers} active on page`} accent="#58a6ff" />
               <StatCard label="Total Roles"        value={roles.length}    sub="defined"                      accent="#3fb950" />
               <StatCard label="Role Assignments"   value={activeAssigns}   sub="active mappings"              accent="#d2a8ff" />
               <StatCard label="SOD Violations"     value={sod.total}       sub="require remediation"          accent="#d29922" alert={sod.total > 0} />
@@ -484,10 +541,23 @@ export default function Dashboard() {
         {/* ══ USERS ══ */}
         {tab === 'users' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div>
-              <h1 style={{ fontSize: 20, fontWeight: 600, color: '#e6edf3' }}>Users</h1>
-              <p style={{ color: '#8b949e', fontSize: 13, marginTop: 4 }}>{users.length} total · {activeUsers} active · {inactiveUsers} inactive</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <h1 style={{ fontSize: 20, fontWeight: 600, color: '#e6edf3' }}>Users</h1>
+                <p style={{ color: '#8b949e', fontSize: 13, marginTop: 4 }}>
+                  {userTotal} total · {safeUsers.filter(u => u.is_active).length} active on this page
+                </p>
+              </div>
+              {/* Search box */}
+              <input
+                type="text"
+                placeholder="Search username or email…"
+                value={userSearch}
+                onChange={e => { setUserSearch(e.target.value); setUserPage(0); }}
+                style={{ background: '#0d1117', border: '1px solid #30363d', borderRadius: 8, padding: '8px 14px', color: '#e6edf3', fontSize: 13, width: 260, outline: 'none', fontFamily: 'inherit' }}
+              />
             </div>
+
             <Card style={{ padding: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
@@ -498,7 +568,9 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {users.slice(0, 100).map(u => (
+                  {safeUsers.length === 0 ? (
+                    <tr><td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>No users found</td></tr>
+                  ) : safeUsers.map(u => (
                     <tr key={u.id} className="trow" style={{ borderBottom: '1px solid #21262d', transition: 'background 0.1s' }}>
                       <td style={{ padding: '11px 18px', fontFamily: 'monospace', color: '#8b949e', fontSize: 11 }}>#{u.id}</td>
                       <td style={{ padding: '11px 18px', color: '#58a6ff', fontWeight: 500 }}>{u.username}</td>
@@ -517,11 +589,42 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
-              {users.length > 100 && (
-                <div style={{ padding: '12px 18px', color: '#8b949e', fontSize: 12, borderTop: '1px solid #21262d' }}>
-                  Showing 100 of {users.length} users
+
+              {/* Pagination bar */}
+              <div style={{ padding: '14px 18px', borderTop: '1px solid #21262d', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                <span style={{ color: '#8b949e', fontSize: 12 }}>
+                  Showing {userPage * PAGE_SIZE + 1}–{Math.min((userPage + 1) * PAGE_SIZE, userTotal)} of {userTotal} users
+                </span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button
+                    onClick={() => setUserPage(p => Math.max(0, p - 1))}
+                    disabled={userPage === 0}
+                    style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 6, padding: '6px 14px', color: userPage === 0 ? '#484f58' : '#e6edf3', fontSize: 12, cursor: userPage === 0 ? 'default' : 'pointer', fontFamily: 'inherit' }}
+                  >← Prev</button>
+
+                  {/* Page number buttons */}
+                  {Array.from({ length: Math.min(7, Math.ceil(userTotal / PAGE_SIZE)) }, (_, i) => {
+                    const totalPages = Math.ceil(userTotal / PAGE_SIZE);
+                    let page = i;
+                    if (totalPages > 7) {
+                      const start = Math.max(0, Math.min(userPage - 3, totalPages - 7));
+                      page = start + i;
+                    }
+                    return (
+                      <button key={page}
+                        onClick={() => setUserPage(page)}
+                        style={{ background: page === userPage ? '#58a6ff' : '#161b22', border: `1px solid ${page === userPage ? '#58a6ff' : '#30363d'}`, borderRadius: 6, padding: '6px 11px', color: page === userPage ? '#010409' : '#8b949e', fontSize: 12, cursor: 'pointer', fontWeight: page === userPage ? 700 : 400, fontFamily: 'inherit', minWidth: 34 }}
+                      >{page + 1}</button>
+                    );
+                  })}
+
+                  <button
+                    onClick={() => setUserPage(p => p + 1)}
+                    disabled={(userPage + 1) * PAGE_SIZE >= userTotal}
+                    style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 6, padding: '6px 14px', color: (userPage + 1) * PAGE_SIZE >= userTotal ? '#484f58' : '#e6edf3', fontSize: 12, cursor: (userPage + 1) * PAGE_SIZE >= userTotal ? 'default' : 'pointer', fontFamily: 'inherit' }}
+                  >Next →</button>
                 </div>
-              )}
+              </div>
             </Card>
           </div>
         )}
@@ -583,6 +686,104 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
+            </Card>
+          </div>
+        )}
+
+        {/* ══ CELERY TASKS ══ */}
+        {tab === 'tasks' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div>
+              <h1 style={{ fontSize: 20, fontWeight: 600, color: '#e6edf3' }}>Celery Background Tasks</h1>
+              <p style={{ color: '#8b949e', fontSize: 13, marginTop: 4 }}>
+                Automated jobs running via Celery worker + beat scheduler · Evidence in Audit Log tab
+              </p>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+
+              {/* Task 1 */}
+              <Card style={{ borderTop: '3px solid #3fb950' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <span style={{ fontSize: 22 }}>🔒</span>
+                  <span style={{ background: '#0d2a0d', color: '#3fb950', fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 99, border: '1px solid #2ea04330' }}>DAILY · 00:00 UTC</span>
+                </div>
+                <h3 style={{ color: '#e6edf3', fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Role Expiration Check</h3>
+                <p style={{ color: '#8b949e', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
+                  Scans all active <code style={{ color: '#58a6ff', background: '#161b22', padding: '1px 5px', borderRadius: 3 }}>user_roles</code> records for expired assignments. Marks them <code style={{ color: '#f78166', background: '#161b22', padding: '1px 5px', borderRadius: 3 }}>is_active=False</code> and writes a <code style={{ color: '#d2a8ff', background: '#161b22', padding: '1px 5px', borderRadius: 3 }}>ROLE_REVOKED</code> audit log entry for each one.
+                </p>
+                <div style={{ borderTop: '1px solid #21262d', paddingTop: 12 }}>
+                  <p style={{ color: '#484f58', fontSize: 11, fontFamily: 'monospace' }}>tasks.daily_role_expiration_check</p>
+                  <p style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>Evidence → Audit Log: <span style={{ color: '#3fb950' }}>ROLE_REVOKED</span></p>
+                </div>
+              </Card>
+
+              {/* Task 2 */}
+              <Card style={{ borderTop: '3px solid #58a6ff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <span style={{ fontSize: 22 }}>📊</span>
+                  <span style={{ background: '#0d1a2a', color: '#58a6ff', fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 99, border: '1px solid #58a6ff30' }}>EVERY 6 HOURS</span>
+                </div>
+                <h3 style={{ color: '#e6edf3', fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Compliance Report</h3>
+                <p style={{ color: '#8b949e', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
+                  Generates a system-wide compliance snapshot: counts active users, orphaned users (no roles assigned), live SOD violations, and policy violation events from the last 6 hours. Saves summary as a <code style={{ color: '#d2a8ff', background: '#161b22', padding: '1px 5px', borderRadius: 3 }}>COMPLIANCE_REPORT</code> audit entry.
+                </p>
+                <div style={{ borderTop: '1px solid #21262d', paddingTop: 12 }}>
+                  <p style={{ color: '#484f58', fontSize: 11, fontFamily: 'monospace' }}>tasks.compliance_report_generation</p>
+                  <p style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>Evidence → Audit Log: <span style={{ color: '#58a6ff' }}>COMPLIANCE_REPORT</span></p>
+                </div>
+              </Card>
+
+              {/* Task 3 */}
+              <Card style={{ borderTop: '3px solid #da3633' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <span style={{ fontSize: 22 }}>🤖</span>
+                  <span style={{ background: '#1a0808', color: '#da3633', fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 99, border: '1px solid #da363330' }}>EVERY HOUR</span>
+                </div>
+                <h3 style={{ color: '#e6edf3', fontSize: 15, fontWeight: 600, marginBottom: 8 }}>ML Anomaly Detection</h3>
+                <p style={{ color: '#8b949e', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
+                  Runs <strong style={{ color: '#e6edf3' }}>Isolation Forest</strong> (scikit-learn) on all active users. Features: role count, login failures, permission escalations in last 24h. Flags the top 5% as anomalous with <code style={{ color: '#d2a8ff', background: '#161b22', padding: '1px 5px', borderRadius: 3 }}>SUSPICIOUS_ACCESS</code> entries — visible in the Threats tab.
+                </p>
+                <div style={{ borderTop: '1px solid #21262d', paddingTop: 12 }}>
+                  <p style={{ color: '#484f58', fontSize: 11, fontFamily: 'monospace' }}>tasks.anomaly_detection_job</p>
+                  <p style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>Evidence → Threats tab: <span style={{ color: '#da3633' }}>SUSPICIOUS_ACCESS</span></p>
+                </div>
+              </Card>
+            </div>
+
+            {/* Architecture diagram */}
+            <Card>
+              <SectionTitle icon="⚙">Task Execution Architecture</SectionTitle>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 0, alignItems: 'center', marginTop: 8 }}>
+                {[
+                  { label: 'Celery Beat', sub: 'Scheduler', color: '#d2a8ff', icon: '⏱' },
+                  { label: '→', sub: '', color: '#30363d', icon: '' },
+                  { label: 'Redis', sub: 'Message Broker', color: '#ffa657', icon: '⚡' },
+                  { label: '→', sub: '', color: '#30363d', icon: '' },
+                  { label: 'Celery Worker', sub: 'Task Executor', color: '#3fb950', icon: '⚙' },
+                ].map((item, i) => (
+                  <div key={i} style={{ textAlign: 'center', padding: '12px 8px' }}>
+                    {item.icon && (
+                      <div style={{ width: 48, height: 48, background: item.color + '15', border: `1px solid ${item.color}40`, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, margin: '0 auto 8px' }}>
+                        {item.icon}
+                      </div>
+                    )}
+                    <p style={{ color: item.icon ? '#e6edf3' : '#30363d', fontSize: item.icon ? 13 : 20, fontWeight: item.icon ? 600 : 400 }}>{item.label}</p>
+                    {item.sub && <p style={{ color: '#8b949e', fontSize: 11, marginTop: 3 }}>{item.sub}</p>}
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 16, background: '#0d1117', border: '1px solid #21262d', borderRadius: 8, padding: 14 }}>
+                <p style={{ color: '#8b949e', fontSize: 12, lineHeight: 1.7 }}>
+                  <strong style={{ color: '#e6edf3' }}>How to verify tasks ran:</strong> Go to the <strong style={{ color: '#58a6ff' }}>Audit Log</strong> tab and look for events of type <code style={{ color: '#3fb950' }}>ROLE_REVOKED</code>, <code style={{ color: '#58a6ff' }}>COMPLIANCE_REPORT</code>, or <code style={{ color: '#da3633' }}>SUSPICIOUS_ACCESS</code>. These are written directly to the database by the tasks. You can also run a task manually:
+                </p>
+                <div style={{ background: '#010409', border: '1px solid #30363d', borderRadius: 6, padding: '10px 14px', marginTop: 10, fontFamily: 'monospace', fontSize: 12, color: '#3fb950' }}>
+                  docker exec iam_celery_worker celery -A tasks call tasks.anomaly_detection_job
+                </div>
+                <div style={{ background: '#010409', border: '1px solid #30363d', borderRadius: 6, padding: '10px 14px', marginTop: 8, fontFamily: 'monospace', fontSize: 12, color: '#3fb950' }}>
+                  docker exec iam_celery_worker celery -A tasks call tasks.compliance_report_generation
+                </div>
+              </div>
             </Card>
           </div>
         )}
