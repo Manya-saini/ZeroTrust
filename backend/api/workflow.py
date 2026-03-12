@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database.init_db import SessionLocal
 from database.models import AccessRequest, ApprovalHistory, User, Role
+from datetime import datetime
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ def approve_request(request_id: int, approved_by: int, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="Request not found")
     req.status = "approved"
     req.reviewed_by = approved_by
-    req.reviewed_at = db.execute('SELECT NOW()').scalar()
+    req.reviewed_at = datetime.utcnow()
     db.commit()
     history = ApprovalHistory(access_request_id=request_id, approved_by=approved_by, status="approved")
     db.add(history)
@@ -41,7 +42,7 @@ def reject_request(request_id: int, rejected_by: int, comments: str, db: Session
         raise HTTPException(status_code=404, detail="Request not found")
     req.status = "rejected"
     req.reviewed_by = rejected_by
-    req.reviewed_at = db.execute('SELECT NOW()').scalar()
+    req.reviewed_at = datetime.utcnow()
     db.commit()
     history = ApprovalHistory(access_request_id=request_id, approved_by=rejected_by, status="rejected", comments=comments)
     db.add(history)

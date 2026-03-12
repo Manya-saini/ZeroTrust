@@ -4,4 +4,4 @@ COPY package.json .
 COPY package-lock.json .
 RUN npm install --frozen-lockfile
 COPY . .
-CMD ["npm", "run", "dev"]
+CMD ["npm", "run", "dev", "--", "-H", "0.0.0.0"]

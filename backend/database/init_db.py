@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Base
+from database.models import Base   # ← fixed: was "from models import Base"
 import os
 
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://iam_admin:iam_password@db:5432/iam_db')

@@ -1,4 +1,4 @@
-from sqlalchemy import (Column, Integer, String, Boolean, ForeignKey, Text, DateTime, UniqueConstraint)
+from sqlalchemy import (Column, Integer, String, Boolean, ForeignKey, Text, DateTime)
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 
@@ -23,7 +23,8 @@ class User(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
     department = relationship('Department', back_populates='users')
     manager = relationship('User', remote_side=[id])
-    roles = relationship('UserRole', back_populates='user')
+    # ✅ FIX: tell SQLAlchemy to use user_id (not assigned_by) for this relationship
+    roles = relationship('UserRole', back_populates='user', foreign_keys='UserRole.user_id')
 
 class Role(Base):
     __tablename__ = 'roles'
@@ -58,7 +59,9 @@ class UserRole(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime)
     is_active = Column(Boolean, default=True)
-    user = relationship('User', back_populates='roles')
+    # ✅ FIX: explicit foreign_keys on both relationships to resolve ambiguity
+    user = relationship('User', back_populates='roles', foreign_keys=[user_id])
+    assigner = relationship('User', foreign_keys=[assigned_by])
     role = relationship('Role')
 
 class Entitlement(Base):
