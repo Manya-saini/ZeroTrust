@@ -1,0 +1,83 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    container_name: iam_postgres
+    environment:
+      POSTGRES_DB: iam_db
+      POSTGRES_USER: iam_admin
+      POSTGRES_PASSWORD: iam_password
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - iam_net
+
+  redis:
+    image: redis:7
+    container_name: iam_redis
+    ports:
+      - '6379:6379'
+    networks:
+      - iam_net
+
+  backend:
+    build: ./backend
+    container_name: iam_backend
+    environment:
+      DATABASE_URL: postgresql://iam_admin:iam_password@db:5432/iam_db
+      REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      - db
+      - redis
+      - keycloak
+    ports:
+      - '8000:8000'
+    networks:
+      - iam_net
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.1
+    container_name: iam_keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - '8080:8080'
+    command: start-dev
+    networks:
+      - iam_net
+
+  frontend:
+    build: ./frontend
+    container_name: iam_frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    depends_on:
+      - backend
+    ports:
+      - '3000:3000'
+    networks:
+      - iam_net
+
+  nginx:
+    image: nginx:latest
+    container_name: iam_nginx
+    ports:
+      - '80:80'
+    volumes:
+      - ./infrastructure/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - iam_net
+
+volumes:
+  postgres_data:
+
+networks:
+  iam_net:
+    driver: bridge
