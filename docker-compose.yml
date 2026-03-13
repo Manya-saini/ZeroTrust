@@ -63,7 +63,10 @@ services:
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: keycloak_password
       KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
       KC_HTTP_ENABLED: "true"
+      KC_PROXY: edge
+      KC_HTTP_PORT: "8080"
     ports:
       - '8080:8080'
     command: start-dev
@@ -89,11 +92,42 @@ services:
       - '8000:8000'
     networks:
       - iam_net
-    # Show logs in terminal
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
+
+  # Celery worker — executes the actual tasks
+  celery_worker:
+    build: ./backend
+    container_name: iam_celery_worker
+    command: celery -A tasks worker --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql://iam_admin:iam_password@db:5432/iam_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - iam_net
+
+  # Celery beat — triggers tasks on the schedule defined in tasks.py
+  celery_beat:
+    build: ./backend
+    container_name: iam_celery_beat
+    command: celery -A tasks beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://iam_admin:iam_password@db:5432/iam_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - iam_net
 
   frontend:
     build: ./frontend
