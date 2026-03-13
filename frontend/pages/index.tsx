@@ -6,7 +6,7 @@ export default function Home() {
     <div style={{ minHeight: '100vh', background: '#010409' }}>
       <Head>
         <title>ZeroTrust Platform</title>
-        <meta name="description" content="ZeroTrust IAM Governance Platform" />
+        <meta name="description" content="ZeroTrust Governance Platform" />
       </Head>
       <Dashboard />
     </div>

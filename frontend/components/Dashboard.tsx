@@ -254,7 +254,7 @@ export default function Dashboard() {
       <header style={{ background: '#010409', borderBottom: '1px solid #21262d', padding: '0 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 56, position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 28, height: 28, background: 'linear-gradient(135deg, #58a6ff, #3fb950)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>⬡</div>
-          <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: '0.04em' }}>ZEROTRUST IAM</span>
+          <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: '0.04em' }}>ZEROTRUST</span>
           <span style={{ color: '#30363d', fontSize: 14 }}>|</span>
           <span style={{ color: '#8b949e', fontSize: 12 }}>Governance Platform</span>
         </div>
